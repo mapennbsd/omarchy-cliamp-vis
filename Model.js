@@ -183,6 +183,21 @@ function isSilent(levels, threshold) {
   return true
 }
 
+// Whether the caps have finished falling.
+//
+// The columns reach zero first: a cap is still on its way down for a beat after
+// the column under it has gone. So an animation that stops as soon as the
+// columns are drained freezes the caps mid-air, leaving a row of marks hanging
+// over an empty analyzer. Both have to be settled before there is nothing left
+// to draw.
+function peaksSettled(peaks) {
+  var source = Array.isArray(peaks) ? peaks : []
+  for (var i = 0; i < source.length; i++) {
+    if (source[i] && clampUnit(source[i].value) > 0) return false
+  }
+  return true
+}
+
 function zeros(count) {
   var n = Math.max(0, Math.floor(Number(count) || 0))
   var out = new Array(n)
@@ -270,6 +285,26 @@ function normalizeHex(value) {
 function colorOrFallback(value, fallback) {
   var hex = normalizeHex(value)
   return hex === "" ? fallback : hex
+}
+
+// --- settings write-back -----------------------------------------------------
+
+// The shell's updateEntryInline rebuilds a widget's shell.json entry out of
+// what it is handed — `{id}` plus the keys passed — so it replaces the entry
+// rather than merging into it. Anything the user configured and the caller
+// forgets to resend is silently dropped, so a toggle has to hand back the whole
+// entry with the one key changed.
+function withSetting(settings, key, value) {
+  var source = settings && typeof settings === "object" ? settings : {}
+  var out = {}
+
+  for (var k in source) {
+    // `id` is supplied by the shell and ignored on the way in; carrying our own
+    // copy back would only risk disagreeing with it.
+    if (k !== "id" && Object.prototype.hasOwnProperty.call(source, k)) out[k] = source[k]
+  }
+  out[String(key)] = value
+  return out
 }
 
 // The gradient wants the theme's own low-to-high ramp, and the Color singleton

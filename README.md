@@ -90,6 +90,27 @@ The widget has no popup; everything lives in its `shell.json` entry and hot-relo
 | `colorHigh` | theme `red` | | Column colour at full height. |
 | `peakColor` | theme foreground | | Peak cap colour. |
 
+## Toggling auto-hide
+
+`hideWhenIdle` can be flipped at runtime over the shell's IPC, which writes the change back to
+`shell.json` so it survives a restart:
+
+```bash
+omarchy-shell mapennbsd.cliamp-vis toggleAutoHide   # flip it
+omarchy-shell mapennbsd.cliamp-vis autoHide         # hide when nothing is playing
+omarchy-shell mapennbsd.cliamp-vis alwaysShow       # keep the slot, show an empty analyzer
+omarchy-shell mapennbsd.cliamp-vis status           # which one is in force
+```
+
+Bind `toggleAutoHide` to a key in `~/.config/hypr/bindings.lua` if you want it on the keyboard.
+
+There is deliberately no click-to-toggle: with auto-hide on and nothing playing there is no widget
+left on the bar to click, so the control would be unreachable in exactly the state you would want
+to leave.
+
+Note that `omarchy bar set` writes values as strings (`"width": "120"`) unless you pass `--json`.
+Every numeric setting is coerced, so both forms work.
+
 ## Colours
 
 The gradient follows the active Omarchy theme. The `Color` singleton carries only foreground,

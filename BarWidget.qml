@@ -154,18 +154,27 @@ BarWidget {
     // recovers on its own, without the process having to be restarted.
     var idle = now - root.lastFrameAt > root.staleMs || now - root.lastChangeAt > root.idleMs
 
-    // Nothing moving and nothing on screen: skip the arithmetic entirely rather
+    // Settled before the early return below, so visibility still follows a
+    // hideWhenIdle toggle while the widget is parked. Deciding it after the
+    // return would leave a widget that is already hidden hidden — the toggle
+    // would appear to do nothing until the music came back.
+    root.active = !(idle && root.hideWhenIdle)
+
+    // Drained, with nothing arriving to move it: skip the arithmetic rather
     // than decaying zeros into zeros thirty times a second for as long as the
     // bar is up and cliamp is not playing.
-    if (idle && !root.active && Model.isSilent(root.levels, 0)) return
+    //
+    // The caps have to be settled too, not just the columns. They are still
+    // falling for a beat after the columns have gone, so stopping at an empty
+    // spectrum alone strands them mid-air over an empty analyzer — which
+    // auto-hide used to cover up by fading the widget out first.
+    if (idle && Model.isSilent(root.levels, 0) && Model.peaksSettled(root.peaks)) return
 
     // The columns always drain when idle, whether or not the widget goes on to
     // hide: a frozen spectrum reads as a hung widget, an empty one reads as a
     // paused player.
     root.levels = Model.applyDecay(root.levels, idle ? Model.zeros(root.levels.length) : root.targets, root.fall)
     root.peaks = Model.applyPeaks(root.peaks, root.levels, root.gravity)
-
-    root.active = !(idle && root.hideWhenIdle)
   }
 
   Timer {
@@ -173,6 +182,41 @@ BarWidget {
     running: true
     repeat: true
     onTriggered: root.tick()
+  }
+
+  // --- auto-hide toggle -------------------------------------------------------
+
+  // Writes hideWhenIdle back to shell.json so the choice survives a restart,
+  // rather than flipping a property that resets with the shell.
+  //
+  // updateEntryInline replaces the widget's entry with what it is handed rather
+  // than merging into it, so the whole entry goes back with the one key
+  // changed. Sending `{hideWhenIdle}` alone would drop the width, colours and
+  // everything else the user had set.
+  function setAutoHide(enable) {
+    if (!bar || !bar.shell || typeof bar.shell.updateEntryInline !== "function")
+      return "unavailable: no shell config to write to"
+
+    bar.shell.updateEntryInline(moduleName, Model.withSetting(settings, "hideWhenIdle", !!enable))
+    return enable ? "auto-hide on: hides when cliamp is not playing"
+                  : "auto-hide off: always visible"
+  }
+
+  // Bindable from Hyprland or runnable from a script:
+  //   omarchy-shell mapennbsd.cliamp-vis toggleAutoHide
+  //
+  // The bar is built once per monitor, so every surface registers this target
+  // and one of them wins the route — which is enough, because the winner
+  // persists to shell.json and every surface picks the change up from there.
+  IpcHandler {
+    target: root.moduleName
+
+    function toggleAutoHide(): string { return root.setAutoHide(!root.hideWhenIdle) }
+    function autoHide(): string { return root.setAutoHide(true) }
+    function alwaysShow(): string { return root.setAutoHide(false) }
+    function status(): string {
+      return root.hideWhenIdle ? "auto-hide on" : "auto-hide off"
+    }
   }
 
   // --- stream ---------------------------------------------------------------

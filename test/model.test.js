@@ -261,6 +261,40 @@ test("applyPeaks starts from nothing when the column count grows", () => {
                    [{ value: 0.5, velocity: 0 }, { value: 0.25, velocity: 0 }])
 })
 
+test("peaksSettled is false while a cap is still falling", () => {
+  // The columns reach zero a beat before the caps do; stopping the animation on
+  // the columns alone strands the caps mid-air.
+  assert.equal(Model.peaksSettled([{ value: 0.3, velocity: 0.02 }]), false)
+})
+
+test("peaksSettled is true once every cap has reached the floor", () => {
+  assert.equal(Model.peaksSettled([{ value: 0, velocity: 0 }, { value: 0, velocity: 0 }]), true)
+  assert.equal(Model.peaksSettled([]), true)
+  assert.equal(Model.peaksSettled(null), true)
+})
+
+test("peaksSettled ignores a hole in the peak state", () => {
+  assert.equal(Model.peaksSettled([null, { value: 0, velocity: 0 }]), true)
+})
+
+test("a cap is still falling at the moment its column lands", () => {
+  // This is the invariant the render guard depends on: stopping the animation
+  // when the columns drain would strand the cap in mid-air. Run to the exact
+  // tick the columns land on rather than a fixed count, so the test does not
+  // quietly stop proving anything if the default rates are retuned.
+  let levels = [1]
+  let peaks = Model.applyPeaks([], levels, 0.004)
+  let ticks = 0
+  while (!Model.isSilent(levels, 0) && ticks < 1000) {
+    levels = Model.applyDecay(levels, [0], 0.07)
+    peaks = Model.applyPeaks(peaks, levels, 0.004)
+    ticks++
+  }
+
+  assert.equal(Model.isSilent(levels, 0), true, "columns should have drained")
+  assert.equal(Model.peaksSettled(peaks), false, "cap should still be falling when its column lands")
+})
+
 test("peakValues projects the render values out of the peak state", () => {
   assert.deepEqual(Model.peakValues([{ value: 0.5, velocity: 0.1 }, null]), [0.5, 0])
   assert.deepEqual(Model.peakValues(null), [])
@@ -343,6 +377,39 @@ test("colorOrFallback keeps a configured colour and falls back on an unset one",
   assert.equal(Model.colorOrFallback("#1fb714", "#ffffff"), "#1fb714")
   assert.equal(Model.colorOrFallback("", "#ffffff"), "#ffffff")
   assert.equal(Model.colorOrFallback("nonsense", "#ffffff"), "#ffffff")
+})
+
+// --- withSetting ------------------------------------------------------------
+
+test("withSetting carries every other key back", () => {
+  // updateEntryInline replaces the entry rather than merging, so anything left
+  // out of the payload is dropped from the user's config.
+  const entry = { id: "mapennbsd.cliamp-vis", width: 96, barGap: 2, colorLow: "#1fb714" }
+  const next = Model.withSetting(entry, "hideWhenIdle", false)
+  assert.equal(next.width, 96)
+  assert.equal(next.barGap, 2)
+  assert.equal(next.colorLow, "#1fb714")
+  assert.equal(next.hideWhenIdle, false)
+})
+
+test("withSetting drops id, which the shell supplies itself", () => {
+  assert.equal("id" in Model.withSetting({ id: "x", width: 96 }, "hideWhenIdle", true), false)
+})
+
+test("withSetting overwrites a key that is already set", () => {
+  assert.equal(Model.withSetting({ hideWhenIdle: true }, "hideWhenIdle", false).hideWhenIdle, false)
+})
+
+test("withSetting does not mutate the entry it was given", () => {
+  const entry = { width: 96 }
+  Model.withSetting(entry, "hideWhenIdle", false)
+  assert.deepEqual(entry, { width: 96 })
+})
+
+test("withSetting copes with an empty or missing entry", () => {
+  assert.deepEqual(Model.withSetting({}, "hideWhenIdle", true), { hideWhenIdle: true })
+  assert.deepEqual(Model.withSetting(null, "hideWhenIdle", true), { hideWhenIdle: true })
+  assert.deepEqual(Model.withSetting(undefined, "hideWhenIdle", true), { hideWhenIdle: true })
 })
 
 // --- parseThemeColors -------------------------------------------------------
