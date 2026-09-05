@@ -50,6 +50,12 @@ test("parseFrame rejects junk instead of throwing", () => {
     assert.equal(Model.parseFrame(raw), null, JSON.stringify(raw))
 })
 
+test("parseFrame rejects a frame carrying no bands at all", () => {
+  // An empty spectrum would otherwise lay out zero columns and read as a live
+  // stream, holding the widget open on nothing.
+  assert.equal(Model.parseFrame('{"ok":true,"bands":[]}'), null)
+})
+
 test("parseFrame accepts a frame with no visualizer field", () => {
   assert.equal(Model.parseFrame('{"ok":true,"bands":[0.5]}').visualizer, "")
 })
@@ -74,6 +80,11 @@ test("foldBands clamps readings into 0..1", () => {
   assert.deepEqual(Model.foldBands([-2, 5], 2), [0, 1])
 })
 
+test("foldBands passes readings straight through at one column per band", () => {
+  // The Bars mode's 10 bands are drawn as 10 columns, so nothing is folded.
+  assert.deepEqual(Model.foldBands([0.1, 0.9, 0.4], 3), [0.1, 0.9, 0.4])
+})
+
 test("foldBands never leaves an empty group when asked for more columns than bands", () => {
   const folded = Model.foldBands([1, 0.5], 5)
   assert.equal(folded.length, 5)
@@ -87,6 +98,101 @@ test("foldBands returns zeros for a missing or empty spectrum", () => {
 
 test("foldBands ignores non-finite bands rather than propagating NaN", () => {
   assert.deepEqual(Model.foldBands([NaN, 0.4], 1), [0.4])
+})
+
+// --- columnCount ------------------------------------------------------------
+
+test("columnCount follows cliamp's band count when uncapped", () => {
+  // Bars and Columns stream 10 bands, ClassicPeak streams 64.
+  assert.equal(Model.columnCount(10, 0), 10)
+  assert.equal(Model.columnCount(64, 0), 64)
+})
+
+test("columnCount caps a wide mode without inventing columns for a narrow one", () => {
+  assert.equal(Model.columnCount(64, 24), 24)
+  // 10 bands stay 10 columns even when a larger cap is set: folding up would
+  // only repeat readings across neighbours.
+  assert.equal(Model.columnCount(10, 24), 10)
+})
+
+test("columnCount handles the degenerate cases", () => {
+  assert.equal(Model.columnCount(0, 0), 0)
+  assert.equal(Model.columnCount(null, null), 0)
+  assert.equal(Model.columnCount(-4, 0), 0)
+})
+
+// --- columnWidths -----------------------------------------------------------
+
+test("columnWidths fills the span exactly, gaps included", () => {
+  const widths = Model.columnWidths(120, 10, 1)
+  assert.equal(widths.length, 10)
+  assert.equal(Model.spectrumWidth(widths, 1), 120)
+})
+
+test("columnWidths spreads the remainder rather than dropping it", () => {
+  // 100 - 9 gaps = 91 across 10 columns: nine 9s and one 10, not ten 9s.
+  const widths = Model.columnWidths(100, 10, 1)
+  assert.equal(widths.reduce((a, b) => a + b, 0), 91)
+  assert.deepEqual([...new Set(widths)].sort((a, b) => a - b), [9, 10])
+})
+
+test("columnWidths keeps every column a whole number of pixels", () => {
+  for (const count of [7, 10, 13, 24, 64]) {
+    for (const w of Model.columnWidths(120, count, 1))
+      assert.equal(w, Math.floor(w), `count=${count}`)
+  }
+})
+
+test("columnWidths keeps the analyzer one width as the band count changes", () => {
+  // A cliamp visualizer switch changes the band count; the widget must not
+  // resize under its neighbours on the bar. At 64 bands the gap is what gives.
+  for (const count of [10, 24, 64]) {
+    const gap = Model.effectiveGap(120, count, 1)
+    assert.equal(Model.spectrumWidth(Model.columnWidths(120, count, gap), gap), 120, `count=${count}`)
+  }
+})
+
+// --- effectiveGap -----------------------------------------------------------
+
+test("effectiveGap grants the requested gap when the span can afford it", () => {
+  assert.equal(Model.effectiveGap(120, 10, 1), 1)
+})
+
+test("effectiveGap drops the gap rather than overflowing the span", () => {
+  // 64 columns at 1px plus 63 gaps is 127px, which would not fit in 120.
+  assert.equal(Model.effectiveGap(120, 64, 1), 0)
+})
+
+test("effectiveGap never exceeds what was asked for", () => {
+  assert.equal(Model.effectiveGap(480, 10, 1), 1)
+  assert.equal(Model.effectiveGap(480, 10, 0), 0)
+})
+
+test("effectiveGap has nothing to space with fewer than two columns", () => {
+  assert.equal(Model.effectiveGap(120, 1, 1), 0)
+  assert.equal(Model.effectiveGap(120, 0, 1), 0)
+})
+
+test("columnWidths never produces a column narrower than a pixel", () => {
+  // 64 columns and 63 gaps cannot fit in 40px; the columns win.
+  for (const w of Model.columnWidths(40, 64, 1)) assert.ok(w >= 1)
+})
+
+test("columnWidths returns nothing to lay out when there are no columns", () => {
+  assert.deepEqual(Model.columnWidths(120, 0, 1), [])
+})
+
+// --- spectrumWidth ----------------------------------------------------------
+
+test("spectrumWidth counts the gaps between columns, not after the last one", () => {
+  assert.equal(Model.spectrumWidth([3, 3, 3, 3], 1), 4 * 3 + 3)
+})
+
+test("spectrumWidth handles the degenerate cases", () => {
+  assert.equal(Model.spectrumWidth([], 1), 0)
+  assert.equal(Model.spectrumWidth(null, 1), 0)
+  assert.equal(Model.spectrumWidth([3], 1), 3)
+  assert.equal(Model.spectrumWidth([3, 3], 0), 6)
 })
 
 // --- applyDecay -------------------------------------------------------------
@@ -218,18 +324,6 @@ test("zeros builds a spectrum of the requested width", () => {
   assert.deepEqual(Model.zeros(-1), [])
 })
 
-// --- spectrumWidth ----------------------------------------------------------
-
-test("spectrumWidth counts the gaps between columns, not after the last one", () => {
-  assert.equal(Model.spectrumWidth(4, 3, 1), 4 * 3 + 3)
-})
-
-test("spectrumWidth handles the degenerate cases", () => {
-  assert.equal(Model.spectrumWidth(0, 3, 1), 0)
-  assert.equal(Model.spectrumWidth(1, 3, 1), 3)
-  assert.equal(Model.spectrumWidth(2, 3, 0), 6)
-})
-
 // --- colour -----------------------------------------------------------------
 
 test("normalizeHex drops the alpha channel Qt puts in front", () => {
@@ -249,4 +343,61 @@ test("colorOrFallback keeps a configured colour and falls back on an unset one",
   assert.equal(Model.colorOrFallback("#1fb714", "#ffffff"), "#1fb714")
   assert.equal(Model.colorOrFallback("", "#ffffff"), "#ffffff")
   assert.equal(Model.colorOrFallback("nonsense", "#ffffff"), "#ffffff")
+})
+
+// --- parseThemeColors -------------------------------------------------------
+
+// Shaped like a real Omarchy theme's colors.toml, variants included.
+const THEME = [
+  'mode = "dark"',
+  '',
+  'accent = "#faa968"',
+  'muted = "#2a6b78"',
+  'background = "#05182e"',
+  'foreground = "#f6dcac"',
+  'dark_foreground = "#3f8f8a"',
+  'light_foreground = "#a7c9c6"',
+  'red = "#f85525"',
+  'yellow = "#e97b3c"',
+  'green = "#028391"',
+  'bright_red = "#f85525"',
+  'bright_yellow = "#e97b3c"',
+  'bright_green = "#028391"'
+].join("\n")
+
+test("parseThemeColors picks up the ramp the gradient needs", () => {
+  const colors = Model.parseThemeColors(THEME)
+  assert.equal(colors.green, "#028391")
+  assert.equal(colors.yellow, "#e97b3c")
+  assert.equal(colors.red, "#f85525")
+})
+
+test("parseThemeColors picks up the singleton roles too", () => {
+  const colors = Model.parseThemeColors(THEME)
+  assert.equal(colors.accent, "#faa968")
+  assert.equal(colors.muted, "#2a6b78")
+  assert.equal(colors.foreground, "#f6dcac")
+})
+
+test("parseThemeColors does not mistake a bright_/dark_/light_ variant for the key", () => {
+  // dark_foreground sits two lines below foreground and would win if the match
+  // were not anchored, repainting the caps in the wrong colour.
+  assert.equal(Model.parseThemeColors(THEME).foreground, "#f6dcac")
+  assert.equal(Model.parseThemeColors('bright_green = "#111111"').green, undefined)
+  assert.equal(Model.parseThemeColors('dark_foreground = "#111111"').foreground, undefined)
+})
+
+test("parseThemeColors ignores keys it was not asked for", () => {
+  const colors = Model.parseThemeColors(THEME)
+  assert.equal(colors.background, undefined)
+  assert.equal(colors.mode, undefined)
+})
+
+test("parseThemeColors accepts unquoted values", () => {
+  assert.equal(Model.parseThemeColors("green = #028391").green, "#028391")
+})
+
+test("parseThemeColors returns an empty palette rather than throwing", () => {
+  for (const raw of ["", null, undefined, "garbage", "green = teal"])
+    assert.deepEqual(Model.parseThemeColors(raw), {}, JSON.stringify(raw))
 })

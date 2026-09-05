@@ -1,4 +1,5 @@
 import QtQuick
+import Quickshell
 import Quickshell.Io
 import qs.Ui
 import qs.Commons
@@ -31,24 +32,96 @@ BarWidget {
     return Math.max(minimum, Math.min(maximum, numberSetting(name, fallback)))
   }
 
-  readonly property int barCount: intSetting("bars", 16, 4, 32)
-  readonly property int barWidth: intSetting("barWidth", 3, 1, 12)
+  // The analyzer's total width. The columns divide it, rather than the width
+  // falling out of a column count — cliamp's band count changes with its
+  // visualizer mode, and the widget should not resize under its neighbours
+  // every time that happens.
+  readonly property int spanWidth: intSetting("width", 120, 24, 480)
   readonly property int barGap: intSetting("barGap", 1, 0, 6)
+  // 0 follows cliamp's band count exactly. A cap only ever folds columns away,
+  // never invents them.
+  readonly property int maxBars: intSetting("maxBars", 0, 0, 64)
   readonly property int fps: Model.streamFps(setting("fps", 30))
   readonly property bool showPeaks: setting("peaks", true) !== false
   readonly property bool hideWhenIdle: setting("hideWhenIdle", true) !== false
 
-  // Per-tick fall rates. Defaults are tuned for 30fps: a full-height bar
+  // Per-tick fall rates. Defaults are tuned for 30fps: a full-height column
   // reaches the floor in about half a second, and a peak cap hangs for a beat
   // before accelerating away over roughly three quarters of a second.
   readonly property real fall: realSetting("fall", 0.07, 0.005, 1)
   readonly property real gravity: realSetting("peakGravity", 0.004, 0.0005, 0.5)
 
-  readonly property color colorLow: Model.colorOrFallback(setting("colorLow", ""), "#1fb714")
-  readonly property color colorMid: Model.colorOrFallback(setting("colorMid", ""), "#e8e815")
-  readonly property color colorHigh: Model.colorOrFallback(setting("colorHigh", ""), "#e82c0e")
+  // --- colour ---------------------------------------------------------------
+
+  // Palette read from the active theme, keyed as in colors.toml.
+  property var themeColors: ({})
+
+  // Resolution order for a gradient stop: an explicit shell.json colour, then
+  // the theme's own palette entry, then the nearest role on the Color singleton
+  // for a theme whose colors.toml is missing that key.
+  function stopColor(key, paletteName, singletonRole) {
+    var configured = Model.normalizeHex(setting(key, ""))
+    if (configured !== "") return configured
+
+    var themed = Model.normalizeHex(themeColors[paletteName])
+    if (themed !== "") return themed
+
+    return Model.colorOrFallback(String(singletonRole), "#cacccc")
+  }
+
+  // Low to high across the column's travel. A theme's green/yellow/red is its
+  // own cool-to-hot ramp, which is the same thing Winamp's palette said, so the
+  // analyzer keeps meaning what it meant while matching the desktop.
+  readonly property color colorLow: stopColor("colorLow", "green", Color.muted)
+  readonly property color colorMid: stopColor("colorMid", "yellow", Color.accent)
+  readonly property color colorHigh: stopColor("colorHigh", "red", Color.urgent)
+  // The caps follow the bar's own foreground, which is what every other glyph
+  // on the bar is drawn in.
   readonly property color peakColor: Model.colorOrFallback(setting("peakColor", ""),
                                                            bar ? bar.foreground : Color.foreground)
+
+  function refreshThemeNow() { themeFile.reload() }
+  function handleTheme(raw) { root.themeColors = Model.parseThemeColors(raw) }
+
+  FileView {
+    id: themeFile
+    path: Quickshell.env("HOME") + "/.local/state/omarchy/current/theme/colors.toml"
+    watchChanges: true
+    printErrors: false
+    // text() is stale inside the change signal itself, so route both paths
+    // through reload() -> onLoaded, as Commons/Color.qml does for its own file.
+    onFileChanged: reload()
+    onLoaded: root.handleTheme(text())
+    onLoadFailed: root.handleTheme("")
+  }
+
+  // A theme switch arrives as a `shell applyTheme` IPC call carrying the
+  // palette in memory, which a plugin cannot hook. The Color singleton that
+  // handler updates is observable, so it serves as a second trigger in case the
+  // on-disk write does not wake the watcher.
+  Connections {
+    target: Color
+    function onAccentChanged() { root.refreshThemeNow() }
+    function onForegroundChanged() { root.refreshThemeNow() }
+    function onUrgentChanged() { root.refreshThemeNow() }
+    function onMutedChanged() { root.refreshThemeNow() }
+  }
+
+  // --- state ----------------------------------------------------------------
+
+  property var targets: []       // newest frame, folded to the column count
+  property var levels: []        // what is drawn, after decay
+  property var peaks: []         // [{value, velocity}]
+  property var lastBands: null   // newest frame, raw, for the idle test
+  property real lastFrameAt: 0   // a frame arrived: the stream is alive
+  property real lastChangeAt: 0  // the spectrum moved: the player is playing
+  property bool active: false
+
+  // The gap the span can afford at this band count, and the columns that fill
+  // what is left. Both the layout and the Row's spacing read the same value, or
+  // the widget would render wider than it measured.
+  readonly property int columnGap: Model.effectiveGap(spanWidth, levels.length, barGap)
+  readonly property var widths: Model.columnWidths(spanWidth, levels.length, columnGap)
 
   // A stream that has delivered nothing for this long is treated as dead, so
   // the columns drain instead of freezing on the last frame that arrived.
@@ -59,16 +132,6 @@ BarWidget {
   // that a track change does not flicker the widget out and straight back in.
   readonly property int idleMs: 1500
 
-  // --- state ----------------------------------------------------------------
-
-  property var targets: Model.zeros(barCount)   // newest frame, folded
-  property var levels: Model.zeros(barCount)    // what is drawn, after decay
-  property var peaks: []                        // [{value, velocity}]
-  property var lastBands: null                  // newest frame, raw, for the idle test
-  property real lastFrameAt: 0                  // a frame arrived: the stream is alive
-  property real lastChangeAt: 0                 // the spectrum moved: the player is playing
-  property bool active: false
-
   function onFrame(line) {
     var frame = Model.parseFrame(line)
     if (!frame) return
@@ -76,7 +139,7 @@ BarWidget {
     var now = Date.now()
     if (!Model.sameBands(root.lastBands, frame.bands)) root.lastChangeAt = now
     root.lastBands = frame.bands
-    root.targets = Model.foldBands(frame.bands, root.barCount)
+    root.targets = Model.foldBands(frame.bands, Model.columnCount(frame.bands.length, root.maxBars))
     root.lastFrameAt = now
     // Frames are arriving, so whatever backoff the last outage built up has
     // been paid off; the next one should start from the short delay again.
@@ -99,7 +162,7 @@ BarWidget {
     // The columns always drain when idle, whether or not the widget goes on to
     // hide: a frozen spectrum reads as a hung widget, an empty one reads as a
     // paused player.
-    root.levels = Model.applyDecay(root.levels, idle ? Model.zeros(root.barCount) : root.targets, root.fall)
+    root.levels = Model.applyDecay(root.levels, idle ? Model.zeros(root.levels.length) : root.targets, root.fall)
     root.peaks = Model.applyPeaks(root.peaks, root.levels, root.gravity)
 
     root.active = !(idle && root.hideWhenIdle)
@@ -169,18 +232,18 @@ BarWidget {
   visible: opacity > 0
   Behavior on opacity { NumberAnimation { duration: 220; easing.type: Easing.InOutQuad } }
 
-  implicitWidth: Model.spectrumWidth(barCount, barWidth, barGap) + Style.spacing.controlGap
+  implicitWidth: spanWidth + Style.spacing.controlGap
   implicitHeight: barSize
 
   Spectrum {
     anchors.centerIn: parent
-    width: Model.spectrumWidth(root.barCount, root.barWidth, root.barGap)
+    width: Model.spectrumWidth(root.widths, root.columnGap)
     height: Math.max(Style.space(12), root.barSize - Style.space(10))
 
     levels: root.levels
     peaks: Model.peakValues(root.peaks)
-    barWidth: root.barWidth
-    barGap: root.barGap
+    widths: root.widths
+    barGap: root.columnGap
     showPeaks: root.showPeaks
     colorLow: root.colorLow
     colorMid: root.colorMid

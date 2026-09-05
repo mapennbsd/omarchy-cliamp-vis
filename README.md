@@ -43,6 +43,24 @@ A plugin the shell has never seen before is not picked up by a hot reload — or
 `omarchy-shell shell rescanPlugins` — so restart the shell once after the first install. Later
 edits to the plugin's own files do hot-reload normally.
 
+## How many columns you get
+
+cliamp's band count is a property of its **current visualizer mode**, not a constant:
+
+| cliamp mode | Bands |
+|-------------|-------|
+| `Bars`, `BarsDot`, `Columns`, `Wave` | 10 |
+| `ClassicPeak` | 64 |
+
+So the widget draws one column per band and lets them divide a configured width, rather than
+resampling to a column count of its own. Folding 10 bands up into more columns than that cannot
+add detail — it only repeats each reading across two or three neighbours, which reads as
+stair-steps. Set `maxBars` to fold the 64-band modes down; nothing ever folds up.
+
+Because the *width* is what you configure and the columns divide it, switching cliamp's visualizer
+mode re-slices the analyzer in place instead of resizing the widget and shoving its neighbours
+along the bar.
+
 ## Configuration
 
 The widget has no popup; everything lives in its `shell.json` entry and hot-reloads on save.
@@ -50,8 +68,7 @@ The widget has no popup; everything lives in its `shell.json` entry and hot-relo
 ```json
 {
   "id": "mapennbsd.cliamp-vis",
-  "bars": 16,
-  "barWidth": 3,
+  "width": 120,
   "barGap": 1,
   "peaks": true,
   "hideWhenIdle": true
@@ -60,23 +77,42 @@ The widget has no popup; everything lives in its `shell.json` entry and hot-relo
 
 | Key | Default | Range | Meaning |
 |-----|---------|-------|---------|
-| `bars` | `16` | 4–32 | Columns. cliamp's 64 bands are folded down to this many, taking the loudest of each group. |
-| `barWidth` | `3` | 1–12 | Column width in pixels. |
-| `barGap` | `1` | 0–6 | Gap between columns in pixels. |
-| `fps` | `30` | 1–60 | Frames per second requested from `visstream`. Below about 20 the bars stop looking continuous. |
+| `width` | `120` | 24–480 | Total width of the analyzer in pixels. The columns divide it. With `Bars`' 10 bands, 120 gives fat 12px columns; around 72 gives narrow ones. |
+| `barGap` | `1` | 0–6 | Gap between columns. Dropped automatically when a high band count cannot afford it — the configured width wins over the gap, since a widget that overflowed would shove its neighbours. |
+| `maxBars` | `0` | 0–64 | Fold down to at most this many columns. `0` follows cliamp exactly. |
+| `fps` | `30` | 1–60 | Frames per second requested from `visstream`. Below about 20 the columns stop looking continuous. |
 | `peaks` | `true` | | Winamp-style peak caps that hang at the loudest recent reading and then accelerate away. |
 | `hideWhenIdle` | `true` | | Give up the bar slot when nothing is playing. With `false` the widget keeps its slot and shows an empty analyzer. |
 | `fall` | `0.07` | 0.005–1 | How far a column may drop per frame. Higher falls faster. |
 | `peakGravity` | `0.004` | 0.0005–0.5 | Downward acceleration of the peak caps. Higher drops them sooner. |
-| `colorLow` | `#1fb714` | | Column colour at the bottom of its travel. |
-| `colorMid` | `#e8e815` | | Column colour partway up. |
-| `colorHigh` | `#e82c0e` | | Column colour at full height. |
+| `colorLow` | theme `green` | | Column colour at the bottom of its travel. |
+| `colorMid` | theme `yellow` | | Column colour partway up. |
+| `colorHigh` | theme `red` | | Column colour at full height. |
 | `peakColor` | theme foreground | | Peak cap colour. |
 
-Colours accept `#rgb` or `#rrggbb`; `""` means "use the default". The gradient is fixed to each
+## Colours
+
+The gradient follows the active Omarchy theme. The `Color` singleton carries only foreground,
+background, accent, urgent and muted, so the low-to-high ramp is read from the theme's own
+`colors.toml` — `green`, `yellow`, `red` — and watched, so `omarchy theme set` recolours the
+analyzer immediately. A theme missing one of those keys falls back to `muted`, `accent` and
+`urgent` respectively.
+
+A theme's green/yellow/red ramp is its own cool-to-hot progression, which is the same thing
+Winamp's palette said, so the analyzer keeps meaning what it meant while matching the desktop.
+For the literal Winamp palette instead, set the stops explicitly:
+
+```json
+{ "colorLow": "#1fb714", "colorMid": "#e8e815", "colorHigh": "#e82c0e" }
+```
+
+Colours accept `#rgb` or `#rrggbb`; `""` means "use the theme". The gradient is fixed to each
 column's full height rather than stretched to the current reading, so a quiet column shows only
-its green foot and only a loud one reaches the red — which is how Winamp's analyzer coloured, and
-what makes column height and colour say the same thing.
+its coolest colour and only a loud one reaches the hottest — which is how Winamp's analyzer
+coloured, and what makes column height and colour say the same thing.
+
+Peak caps hide once they fall back to the floor. A cap resting on the baseline marks nothing, and
+across a quiet spectrum a row of them reads as a dashed rule drawn under the whole widget.
 
 ## Behaviour when nothing is playing
 

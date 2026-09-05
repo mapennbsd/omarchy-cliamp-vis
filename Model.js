@@ -42,21 +42,37 @@ function parseFrame(line) {
     return null
   }
 
-  if (!frame || frame.ok === false || !Array.isArray(frame.bands)) return null
+  if (!frame || frame.ok === false || !Array.isArray(frame.bands) || frame.bands.length === 0) return null
   return { visualizer: String(frame.visualizer || ""), bands: frame.bands }
 }
 
 // --- band folding ------------------------------------------------------------
 
-// cliamp sends 64 bands; a bar widget has room for a dozen or so columns. Fold
-// by taking the maximum of each group rather than the mean: a mean flattens the
-// single loud band in a group against its quiet neighbours, which costs the
-// analyzer exactly the transient snap that makes it look alive. Winamp took the
-// peak here too.
+// How many columns to draw for a frame.
+//
+// The band count is a property of cliamp's current visualizer mode rather than
+// a constant: Bars and Columns stream 10 bands, ClassicPeak streams 64. So the
+// column count follows the frame instead of being chosen here. Folding 10 bands
+// up into more columns than that cannot add detail — it just repeats each
+// reading across two or three neighbours, which reads as stair-steps.
+//
+// `maximum` caps the 64-band modes so they do not thin the analyzer into
+// hairlines; 0 means "draw whatever cliamp sends".
+function columnCount(bandCount, maximum) {
+  var bands = Math.max(0, Math.floor(Number(bandCount) || 0))
+  var cap = Math.max(0, Math.floor(Number(maximum) || 0))
+  return cap === 0 ? bands : Math.min(bands, cap)
+}
+
+// Fold the frame's bands into `count` columns by taking the maximum of each
+// group rather than the mean: a mean flattens the single loud band in a group
+// against its quiet neighbours, which costs the analyzer exactly the transient
+// snap that makes it look alive. Winamp took the peak here too.
 //
 // Groups are cut linearly over the source bands, which leaves the low end
 // crowded and the top end sparse — that is what produces the familiar tall-left,
-// short-right silhouette rather than a flat wall.
+// short-right silhouette rather than a flat wall. With one column per band, as
+// the Bars mode gives, this passes the readings straight through.
 function foldBands(bands, count) {
   var source = Array.isArray(bands) ? bands : []
   var n = Math.max(1, Math.floor(Number(count) || 0) || 1)
@@ -182,14 +198,60 @@ function clampUnit(value) {
 
 // --- geometry and colour -----------------------------------------------------
 
-// Total width the columns occupy. The trailing gap is dropped: a gap after the
-// last bar is padding, and the bar section already spaces widgets itself.
-function spectrumWidth(count, barWidth, gap) {
+// The gap the columns can actually afford.
+//
+// At a high band count the requested gap can leave less than a pixel per
+// column, and since a column may never be thinner than a pixel, something has
+// to give. The gap gives: a widget that grew past its configured span would
+// shove every neighbour along the bar section, which is worse than columns
+// sitting shoulder to shoulder. 64 bands in a 120px span come out gapless.
+function effectiveGap(span, count, gap) {
   var n = Math.max(0, Math.floor(Number(count) || 0))
-  if (n === 0) return 0
-  var w = Math.max(1, Math.floor(Number(barWidth) || 1))
+  if (n <= 1) return 0
+
+  var requested = Math.max(0, Math.floor(Number(gap) || 0))
+  var affordable = Math.floor((Math.max(0, Math.floor(Number(span) || 0)) - n) / (n - 1))
+  return Math.max(0, Math.min(requested, affordable))
+}
+
+// Integer column widths filling a configured span.
+//
+// The span is what the user sets, and the columns divide it, rather than the
+// user setting a column width and the total falling out of the band count.
+// That keeps the analyzer one width on the bar while cliamp's band count varies
+// with its visualizer mode — the columns get fatter or thinner instead of the
+// widget growing and shrinking under its neighbours.
+//
+// The remainder is handed out a pixel at a time so the columns sum to the span
+// exactly and each lands on a whole pixel; fractional widths shimmer as the
+// rounding lands differently from frame to frame.
+function columnWidths(span, count, gap) {
+  var n = Math.max(0, Math.floor(Number(count) || 0))
+  if (n === 0) return []
+
   var g = Math.max(0, Math.floor(Number(gap) || 0))
-  return n * w + (n - 1) * g
+  // Never below one pixel per column, even if the gaps alone would exceed the
+  // span at a high band count.
+  var usable = Math.max(n, Math.floor(Number(span) || 0) - g * (n - 1))
+  var base = Math.floor(usable / n)
+  var extra = usable - base * n
+
+  var out = new Array(n)
+  for (var i = 0; i < n; i++) out[i] = base + (i < extra ? 1 : 0)
+  return out
+}
+
+// What those columns actually occupy, gaps included. The trailing gap is
+// dropped: a gap after the last column is padding, and the bar section already
+// spaces widgets itself.
+function spectrumWidth(widths, gap) {
+  var list = Array.isArray(widths) ? widths : []
+  if (list.length === 0) return 0
+
+  var g = Math.max(0, Math.floor(Number(gap) || 0))
+  var sum = 0
+  for (var i = 0; i < list.length; i++) sum += Math.max(0, Math.floor(Number(list[i]) || 0))
+  return sum + g * (list.length - 1)
 }
 
 // Qt stringifies an opaque colour as #rrggbb but one with alpha as #aarrggbb,
@@ -208,4 +270,21 @@ function normalizeHex(value) {
 function colorOrFallback(value, fallback) {
   var hex = normalizeHex(value)
   return hex === "" ? fallback : hex
+}
+
+// The gradient wants the theme's own low-to-high ramp, and the Color singleton
+// does not carry one: it exposes foreground, background, accent, urgent and
+// muted, but not green/yellow/red. Those come from the theme's colors.toml,
+// the same way cpu-stats reads the keys it needs.
+//
+// Anchored to the start of the line so the bright_/dark_/light_ variants that
+// sit alongside each key in the same file are not mistaken for it.
+function parseThemeColors(raw) {
+  var out = {}
+  var lines = String(raw || "").split("\n")
+  for (var i = 0; i < lines.length; i++) {
+    var match = lines[i].match(/^\s*(foreground|accent|muted|green|yellow|red)\s*=\s*["']?(#[0-9A-Fa-f]{6})/)
+    if (match) out[match[1]] = match[2]
+  }
+  return out
 }
