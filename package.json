@@ -1,0 +1,9 @@
+{
+  "name": "mapennbsd.cliamp-vis",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Tests for the plugin's pure-JS model layer. Not shipped or required at runtime.",
+  "scripts": {
+    "test": "node --test test/model.test.js"
+  }
+}
