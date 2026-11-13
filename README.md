@@ -40,8 +40,12 @@ omarchy restart shell
 ```
 
 A plugin the shell has never seen before is not picked up by a hot reload — or by
-`omarchy-shell shell rescanPlugins` — so restart the shell once after the first install. Later
-edits to the plugin's own files do hot-reload normally.
+`omarchy-shell shell rescanPlugins` — so restart the shell once after the first install.
+
+Later edits are less reliable than they look. The shell notices a changed file and rebuilds the
+widget, but it can rebuild it from its cached copy of the old code, so the widget restarts and
+behaves exactly as before. Settings in `shell.json` always apply live; after an edit to the
+plugin's own `.qml` or `.js`, run `omarchy restart shell` to be sure the new code is running.
 
 ## How many columns you get
 
