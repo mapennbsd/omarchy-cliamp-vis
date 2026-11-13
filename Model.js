@@ -21,6 +21,54 @@ function streamCommand(fps) {
   return ["cliamp", "visstream", "--fps", String(streamFps(fps))]
 }
 
+// --- player state ------------------------------------------------------------
+
+// A still spectrum is all visstream can say, and it means the same thing for a
+// paused player as for a stopped one. Telling them apart takes asking cliamp,
+// which the widget does only while the spectrum is still.
+function statusCommand() {
+  return ["cliamp", "status", "--json"]
+}
+
+// `cliamp status --json` reports `state` as playing, paused or stopped, and
+// leaves it blank when stopped. Anything unreadable — cliamp gone, a socket
+// error, a reply that is not JSON — counts as stopped, which leaves the widget
+// doing what it always did with a still spectrum: hiding.
+function parseStatus(text) {
+  var reply
+  try {
+    reply = JSON.parse(String(text === undefined || text === null ? "" : text))
+  } catch (e) {
+    return "stopped"
+  }
+  if (!reply || typeof reply !== "object" || reply.ok === false) return "stopped"
+
+  var state = String(reply.state || "").toLowerCase()
+  return state === "playing" || state === "paused" ? state : "stopped"
+}
+
+// Whether a still spectrum should keep the bar slot. A paused player has to
+// stay clickable, or a click-to-pause would hide the widget and leave nothing
+// on the bar to click to resume. "playing" holds too: it is the state frames
+// imply, and it stands until a status reply says otherwise, so the widget does
+// not blink out in the moment between going still and hearing back.
+function holdsSlot(state) {
+  return state === "paused" || state === "playing"
+}
+
+// --- mouse -------------------------------------------------------------------
+
+// Qt's button flags: LeftButton 1, RightButton 2, MiddleButton 4. Taken as
+// numbers so the mapping can be tested without QML.
+function clickCommand(button) {
+  switch (Number(button)) {
+  case 1: return ["cliamp", "toggle"]
+  case 2: return ["cliamp", "next"]
+  case 4: return ["cliamp", "prev"]
+  }
+  return null
+}
+
 // One NDJSON frame: {"ok":true,"visualizer":"Bars","bands":[... 64 floats 0..1]}
 //
 // `visualizer` names the mode cliamp's own TUI is drawing and has no bearing on
