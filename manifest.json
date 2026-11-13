@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "id": "mapennbsd.cliamp-vis",
   "name": "Cliamp Visualizer",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "author": "mapennbsd",
   "description": "Winamp-style spectrum analyzer for the Omarchy bar, driven by cliamp's own visualizer bands",
   "kinds": [
