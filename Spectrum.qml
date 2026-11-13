@@ -12,6 +12,10 @@ Item {
   property var widths: []
   property int barGap: 1
   property bool showPeaks: true
+  // Paused: the columns have drained, which on its own would leave a blank
+  // patch of bar that still answers clicks. A dim stub along the floor of each
+  // column marks the widget as present and waiting.
+  property bool resting: false
   property color colorLow: "#1fb714"
   property color colorMid: "#e8e815"
   property color colorHigh: "#e82c0e"
@@ -48,6 +52,17 @@ Item {
 
         readonly property real level: root.levelAt(index)
         readonly property real peak: root.peakAt(index)
+
+        // Paused marker. Drawn under the column, so the last of a draining
+        // column covers it rather than the two stacking.
+        Rectangle {
+          anchors.bottom: parent.bottom
+          width: parent.width
+          height: 2
+          color: root.colorLow
+          opacity: 0.6
+          visible: root.resting
+        }
 
         // A window that grows from the bottom, clipping a gradient that is
         // always the column's full height. The palette is therefore fixed to
