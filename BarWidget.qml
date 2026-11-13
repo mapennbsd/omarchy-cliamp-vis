@@ -117,6 +117,15 @@ BarWidget {
   property real lastChangeAt: 0  // the spectrum moved: the player is playing
   property bool active: false
 
+  // Settled each tick, since they hang off Date.now(), which no binding sees.
+  property bool streamAlive: false // frames are arriving at all
+  property bool still: false       // ...but the spectrum has stopped moving
+  property bool paused: false      // still, and cliamp says it is paused
+
+  // What cliamp is doing. A moving spectrum implies "playing"; while it is
+  // still, a status poll says which of paused and stopped it is.
+  property string playerState: "playing"
+
   // The gap the span can afford at this band count, and the columns that fill
   // what is left. Both the layout and the Row's spacing read the same value, or
   // the widget would render wider than it measured.
@@ -137,7 +146,10 @@ BarWidget {
     if (!frame) return
 
     var now = Date.now()
-    if (!Model.sameBands(root.lastBands, frame.bands)) root.lastChangeAt = now
+    if (!Model.sameBands(root.lastBands, frame.bands)) {
+      root.lastChangeAt = now
+      root.playerState = "playing"
+    }
     root.lastBands = frame.bands
     root.targets = Model.foldBands(frame.bands, Model.columnCount(frame.bands.length, root.maxBars))
     root.lastFrameAt = now
@@ -152,13 +164,23 @@ BarWidget {
     // (paused, stopped, between tracks) are the same thing to the rendering:
     // both mean there is nothing to show. They differ only in that the second
     // recovers on its own, without the process having to be restarted.
-    var idle = now - root.lastFrameAt > root.staleMs || now - root.lastChangeAt > root.idleMs
+    var stale = now - root.lastFrameAt > root.staleMs
+    var still = now - root.lastChangeAt > root.idleMs
+    var idle = stale || still
+    root.streamAlive = !stale
+    root.still = !stale && still
+
+    // A paused player keeps the slot, so the click that paused it can be
+    // followed by one that resumes it. A stopped player, or no cliamp at all,
+    // gives it up as before.
+    var holding = root.still && Model.holdsSlot(root.playerState)
+    root.paused = root.still && root.playerState === "paused"
 
     // Settled before the early return below, so visibility still follows a
     // hideWhenIdle toggle while the widget is parked. Deciding it after the
     // return would leave a widget that is already hidden hidden — the toggle
     // would appear to do nothing until the music came back.
-    root.active = !(idle && root.hideWhenIdle)
+    root.active = !(idle && root.hideWhenIdle && !holding)
 
     // Drained, with nothing arriving to move it: skip the arithmetic rather
     // than decaying zeros into zeros thirty times a second for as long as the
@@ -182,6 +204,32 @@ BarWidget {
     running: true
     repeat: true
     onTriggered: root.tick()
+  }
+
+  // --- player state ---------------------------------------------------------
+
+  // Asked only while the spectrum is still: a moving one already says
+  // "playing". Polled rather than asked once, because a paused player can be
+  // stopped from elsewhere without the spectrum doing anything to say so.
+  //
+  // Once cliamp says stopped the polling ends: every way out of stopped starts
+  // the spectrum moving again, and frames take it from there.
+  Process {
+    id: statusProbe
+    command: Model.statusCommand()
+    stdout: StdioCollector {
+      // A reply that lands after playback resumed is out of date; frames have
+      // already set the state, and must not be overruled by it.
+      onStreamFinished: if (root.still) root.playerState = Model.parseStatus(text)
+    }
+  }
+
+  Timer {
+    interval: 2000
+    repeat: true
+    triggeredOnStart: true
+    running: root.still && root.playerState !== "stopped"
+    onTriggered: if (!statusProbe.running) statusProbe.running = true
   }
 
   // --- auto-hide toggle -------------------------------------------------------
@@ -289,9 +337,27 @@ BarWidget {
     widths: root.widths
     barGap: root.columnGap
     showPeaks: root.showPeaks
+    resting: root.paused
     colorLow: root.colorLow
     colorMid: root.colorMid
     colorHigh: root.colorHigh
     peakColor: root.peakColor
+  }
+
+  // --- controls ---------------------------------------------------------------
+
+  // Left plays and pauses, right skips ahead, middle goes back. Through
+  // cliamp's own command line, which talks to the running player over its
+  // socket; with no cliamp the area is disabled rather than spawning a command
+  // that can only fail.
+  MouseArea {
+    anchors.fill: parent
+    enabled: root.streamAlive
+    cursorShape: Qt.PointingHandCursor
+    acceptedButtons: Qt.LeftButton | Qt.RightButton | Qt.MiddleButton
+    onClicked: function(mouse) {
+      var command = Model.clickCommand(mouse.button)
+      if (command) Quickshell.execDetached(command)
+    }
   }
 }
