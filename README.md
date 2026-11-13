@@ -5,7 +5,7 @@
 ![preview](preview.png)
 
 The widget appears while [cliamp](https://github.com/dmarcoux/cliamp) is playing and gets out of
-the way when it is not. It is display only — there are no transport controls.
+the way when it is not. Clicking it plays, pauses and skips tracks.
 
 ## Why it reads cliamp instead of the audio device
 
@@ -61,6 +61,22 @@ Because the *width* is what you configure and the columns divide it, switching c
 mode re-slices the analyzer in place instead of resizing the widget and shoving its neighbours
 along the bar.
 
+## Mouse controls
+
+| Click | Does | Runs |
+|-------|------|------|
+| Left | Play / pause | `cliamp toggle` |
+| Right | Next track | `cliamp next` |
+| Middle | Previous track | `cliamp prev` |
+
+The commands go through cliamp's own command line, which talks to the running player over its
+socket, so they act on the same player whether it was started in a terminal or headless. With no
+cliamp running the widget ignores clicks.
+
+A paused player keeps the widget on the bar, even with `hideWhenIdle` on, so the click that paused
+it can be followed by one that resumes it. The columns drain and a dim stub along the floor of each
+one marks it as paused. Only a stopped player, or no cliamp at all, gives up the slot.
+
 ## Configuration
 
 The widget has no popup; everything lives in its `shell.json` entry and hot-reloads on save.
@@ -104,9 +120,9 @@ omarchy-shell mapennbsd.cliamp-vis status           # which one is in force
 
 Bind `toggleAutoHide` to a key in `~/.config/hypr/bindings.lua` if you want it on the keyboard.
 
-There is deliberately no click-to-toggle: with auto-hide on and nothing playing there is no widget
-left on the bar to click, so the control would be unreachable in exactly the state you would want
-to leave.
+There is deliberately no click-to-toggle: the clicks belong to the transport controls, and with
+auto-hide on and cliamp stopped there is no widget left on the bar to click, so the control would
+be unreachable in exactly the state you would want to leave.
 
 Note that `omarchy bar set` writes values as strings (`"width": "120"`) unless you pass `--json`.
 Every numeric setting is coerced, so both forms work.
@@ -140,7 +156,12 @@ across a quiet spectrum a row of them reads as a dashed rule drawn under the who
 cliamp keeps serving `visstream` while paused, and what it serves is the last frame it analysed,
 repeated verbatim — not zeros. A widget that only looked at the current frame would sit frozen
 mid-spectrum and look hung. This one watches whether the spectrum is still *changing*, so a paused
-or stopped player drains the columns and (by default) releases the bar slot.
+or stopped player drains the columns.
+
+A still spectrum looks the same paused as stopped, so while it is still the widget asks
+`cliamp status --json` every two seconds which one it is. Paused keeps the slot, so it can be
+clicked to resume; stopped releases it (by default) and ends the polling, since anything that
+starts playback again sets the spectrum moving. A playing spectrum is never polled.
 
 If cliamp is not running at all, `visstream` exits and the widget retries on a backoff that starts
 at two seconds and doubles to a thirty-second ceiling, resetting as soon as frames arrive. Starting
