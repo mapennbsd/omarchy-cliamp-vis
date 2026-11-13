@@ -29,6 +29,50 @@ test("streamCommand builds an argv with the frame rate as a string", () => {
   assert.deepEqual(Model.streamCommand(999), ["cliamp", "visstream", "--fps", "60"])
 })
 
+// --- player state -------------------------------------------------------------
+
+test("statusCommand asks cliamp for machine-readable state", () => {
+  assert.deepEqual(Model.statusCommand(), ["cliamp", "status", "--json"])
+})
+
+test("parseStatus reads playing and paused", () => {
+  assert.equal(Model.parseStatus('{"ok":true,"state":"playing","volume":0}'), "playing")
+  assert.equal(Model.parseStatus('{"ok":true,"state":"paused"}'), "paused")
+  assert.equal(Model.parseStatus('{"ok":true,"state":"Paused"}'), "paused")
+})
+
+test("parseStatus treats a blank state as stopped, as cliamp's own text output does", () => {
+  assert.equal(Model.parseStatus('{"ok":true,"state":""}'), "stopped")
+  assert.equal(Model.parseStatus('{"ok":true}'), "stopped")
+  assert.equal(Model.parseStatus('{"ok":true,"state":"stopped"}'), "stopped")
+})
+
+test("parseStatus treats anything unreadable as stopped", () => {
+  // cliamp not running prints its error on stderr and nothing on stdout.
+  for (const raw of ["", null, undefined, "not json", "[]", "null", '{"ok":false,"state":"paused"}'])
+    assert.equal(Model.parseStatus(raw), "stopped", JSON.stringify(raw))
+})
+
+test("holdsSlot keeps a paused player clickable and hides a stopped one", () => {
+  assert.equal(Model.holdsSlot("paused"), true)
+  assert.equal(Model.holdsSlot("playing"), true)
+  assert.equal(Model.holdsSlot("stopped"), false)
+  assert.equal(Model.holdsSlot(""), false)
+})
+
+// --- clickCommand -------------------------------------------------------------
+
+test("clickCommand maps left, right and middle to toggle, next and prev", () => {
+  assert.deepEqual(Model.clickCommand(1), ["cliamp", "toggle"])
+  assert.deepEqual(Model.clickCommand(2), ["cliamp", "next"])
+  assert.deepEqual(Model.clickCommand(4), ["cliamp", "prev"])
+})
+
+test("clickCommand ignores buttons it has no action for", () => {
+  for (const button of [0, 8, 16, undefined, "left"])
+    assert.equal(Model.clickCommand(button), null, JSON.stringify(button))
+})
+
 // --- parseFrame -------------------------------------------------------------
 
 test("parseFrame reads a visstream line", () => {
