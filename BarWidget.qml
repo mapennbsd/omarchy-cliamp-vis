@@ -348,16 +348,26 @@ BarWidget {
 
   // Left plays and pauses, right skips ahead, middle goes back. Through
   // cliamp's own command line, which talks to the running player over its
-  // socket; with no cliamp the area is disabled rather than spawning a command
+  // socket; with no cliamp clicks are ignored rather than spawning a command
   // that can only fail.
+  function control(button) {
+    if (!root.streamAlive) return
+    var command = Model.clickCommand(button)
+    if (command) Quickshell.execDetached(command)
+  }
+
+  // The bar lays a MouseArea over every widget slot for drag-to-reorder, and
+  // it takes the left press, so a MouseArea in here never sees one. A left
+  // click that was not a drag is handed to the widget's triggerPress instead —
+  // the hook WidgetButton implements — and `pressable` is what the bar reads
+  // for the pointing-hand cursor and press feedback.
+  readonly property bool pressable: streamAlive
+  function triggerPress(button) { root.control(button) }
+
+  // Right and middle the slot does not accept, so they fall through to here.
   MouseArea {
     anchors.fill: parent
-    enabled: root.streamAlive
-    cursorShape: Qt.PointingHandCursor
-    acceptedButtons: Qt.LeftButton | Qt.RightButton | Qt.MiddleButton
-    onClicked: function(mouse) {
-      var command = Model.clickCommand(mouse.button)
-      if (command) Quickshell.execDetached(command)
-    }
+    acceptedButtons: Qt.RightButton | Qt.MiddleButton
+    onClicked: function(mouse) { root.control(mouse.button) }
   }
 }
